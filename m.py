@@ -340,6 +340,7 @@ if __name__ =="__main__":
             #检查是否已经获取，可以删除log中的书本名来重新抓取
             if book.title in finished_books:
                 print("book already done - ", book.title)
+                continue
             
             #限制进程数，等待空余
             while True:
@@ -357,6 +358,18 @@ if __name__ =="__main__":
             task_list.append(task)
             print("++++++New Task Started:",task)
             #print(task_list)
+
+    #等待最后task_list中的任务结束
+    while True:
+        if is_exit == True:
+            break
+
+        task_list = [x for x in task_list if x.is_alive() == True]
+        if len(task_list) != 0:
+            time.sleep(3)
+        else:
+            break
+
     
     #退出处理
     for i in task_list:
