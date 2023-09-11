@@ -10,6 +10,7 @@ import requests
 import json
 import time
 import signal
+import shutil
 from bs4 import BeautifulSoup
 from multiprocessing import Process, Lock
 
@@ -75,6 +76,7 @@ class Record(object):
             f.close()
         self.lock.release()
 
+
     def getData(self):
         self.lock.acquire()
         ret = []
@@ -87,18 +89,23 @@ class Record(object):
         return ret
 
     def appendData(self, data:str):
-        self.lock.acquire()
-        f = open(self.file, 'a+', encoding='utf-8')
-        f.write(data + "\n")
-        f.close()
-        self.lock.release()
+        current_list = self.getData()
+
+        if data in current_list:
+            pass
+        else:
+            self.lock.acquire()
+            f = open(self.file, 'a+', encoding='utf-8')
+            f.write(data + "\n")
+            f.close()
+            self.lock.release()
 
 class Book(object):
     def __init__(self):
         self.title = ""
         self.entry_url = ""
-        self.chapter_url = ""
-        self.download_urls = []
+        self.chapter_urls = []
+        self.download_urls = {}
 
 
 class downloadTask(Process):
@@ -114,6 +121,7 @@ class downloadTask(Process):
         service = Service(executable_path='./chromedriver/chromedriver.exe')
         options = webdriver.ChromeOptions()
         options.add_argument("headless")
+        options.add_experimental_option('excludeSwitches',['enable-logging'])
         self.driver = webdriver.Chrome(service=service, options=options)
         self.wait = WebDriverWait(self.driver, 10)
 
@@ -121,7 +129,10 @@ class downloadTask(Process):
             ret = self.downloadBook()
         except:
             pass
+        finally:
+            self.close()
         #self.close()
+
 
 
     def getPageText(self, url:str, timeout:int = 10):
@@ -144,82 +155,124 @@ class downloadTask(Process):
         #获取Chapter ID
         ps = self.getPageText(self.book.entry_url)
         soup = BeautifulSoup(ps, 'lxml')
-        rets = soup.find_all(name='a', attrs={'class': 'btn btn-danger btn-square smooth-goto'})
-
-        book_chapter = ""
+        rets = soup.find_all(name='a', attrs={'class': 'pull-left font-w600'})
 
         try:
             for ret in rets:
                 if self.book.entry_url in ret['href']:
-                    book_chapter = ret['href']
-                    break
+                    self.book.chapter_urls.append(ret['href'])
         except Exception as e:
             print(e)
             return result
         
-        if book_chapter == '':
+        if len(self.book.chapter_urls) == 0:
             print("No Chapter ID found!")
             return result
-
-        #chapter_id = string_split(str(book_chapter), "/")[-1]
-
-        self.book.chapter_url = book_chapter
-
+        
         #获取所有页面下载地址
-        ps = self.getPageText(self.book.chapter_url)
-        soup = BeautifulSoup(ps, 'lxml')
-        rets = soup.find_all(name='script')
+        for chapter_url in self.book.chapter_urls:
+            ps = self.getPageText(chapter_url)
+            soup = BeautifulSoup(ps, 'lxml')
+            rets = soup.find_all(name='script')
 
-        #参考https://janda.merahputih.moe/#api-hentai2read
-        base_pic_url = "https://cdn-ngocok-static.sinxdr.workers.dev/hentai" 
+            #参考https://janda.merahputih.moe/#api-hentai2read
+            base_pic_url = "https://cdn-ngocok-static.sinxdr.workers.dev/hentai"
 
-        for ret in rets:
-            if "var gData" in str(ret):
-                #print(ret)
-                gDataRegex = re.compile(r'.*({.*})', re.DOTALL)
-                jstr_origin = gDataRegex.findall(str(ret))[0]
-                jstr = jstr_origin.replace("\'", "\"")
-                #print(jstr)
-                js = json.loads(jstr)
-                for i in js["images"]:
-                    self.book.download_urls.append(base_pic_url + i)
+            download_urls = [] 
 
-                break
+            for ret in rets:
+                if "var gData" in str(ret):
+                    #print(ret)
+                    gDataRegex = re.compile(r'.*({.*})', re.DOTALL)
+                    jstr_origin = gDataRegex.findall(str(ret))[0]
+                    jstr = jstr_origin.replace("\'", "\"")
+                    #print(jstr)
+                    js = json.loads(jstr)
+                    for i in js["images"]:
+                        download_urls.append(base_pic_url + i)
 
+                    self.book.download_urls[chapter_url] = download_urls
+                    #print(self.book.download_urls)
+                    break
+        
         if len(self.book.download_urls) > 0:
             #创建保存目录
-            sp = self.save_path + self.book.title + '/'
-            make_dir(sp)
-            
-            for pic_download_url in self.book.download_urls:
-                print("pic_download_url=", pic_download_url)
-                self.downPagePic(pic_download_url, sp)
+            chapter1 = string_split(self.book.chapter_urls[0], "/")[-1]
+            sp_base = self.save_path + self.book.title + '/'
 
-            self.record.appendData(self.book.title)
+            #一些补救代码，之后无用
+            if os.path.exists(sp_base):
+                if os.path.exists(sp_base + chapter1) == False: 
+                    make_dir(sp_base + chapter1)
+                    for dirpath, dirnames, filenames in os.walk(sp_base):
+                        for filename in filenames:
+                            shutil.move(os.path.join(dirpath, filename), sp_base + chapter1)
 
-            result = True
+
+            for chapter_url in self.book.chapter_urls:
+                chapter = string_split(chapter_url, "/")[-1]
+                if os.path.exists(sp_base + chapter) == False:
+                    make_dir(sp_base + chapter + '/')
+                
+                for pic_download_url in self.book.download_urls[chapter_url]:
+                    print("pic_download_url=", pic_download_url)
+                    self.downloadPagePic(pic_download_url, sp_base + chapter + '/')
+
+                self.record.appendData(self.book.title)
+                result = True
 
         return result
 
-    def downPagePic(self, url:str, path:str, timeout:int = 10):
+    def retriedRequest(self, url:str):
+        result = None
+        count = 0
+
+        while True:
+            try:
+                result = requests.get(url = url)
+                break
+
+            except:
+                if count > 3:
+                    print("########CAN NOT GET:", self.book.chapter_url)
+                    return result
+                else:
+                    count = count + 1
+                    time.sleep(3)
+
+        return result
+
+
+    def downloadPagePic(self, url:str, path:str, timeout:int = 10):
         result = False
-        url_split = url.split('/')
+        url_split = string_split(url, "/")
 
         if len(url_split) == 0:
             return
 
         fn = url_split[-1]
         fs = path + fn
-        print(fn)
-        print(fs)
-
         self.lock.acquire()
 
         try:
-            ret = requests.get(url = url)
-            
-            with open(fs, 'wb') as f:
-                f.write(ret.content)
+            if ((os.path.exists(fs) == False) and (os.path.exists(fs[0:-3]+"png") == False)):
+                print(fn)
+                print(fs)
+                ret = self.retriedRequest(url)
+                with open(fs, 'wb') as f:
+                    f.write(ret.content)
+
+            if os.path.getsize(fs) < 10*1024:
+                #print("########### NEED PNG FIle:", fs)
+                os.remove(fs)
+                # url = url[0:-3] + "png"
+                # fs = fs[0:-3] + "png"
+                ret = self.retriedRequest(url)
+
+                with open(fs, 'wb') as f:
+                    f.write(ret.content)
+                
+        
             result = True
         except:
             pass
@@ -236,6 +289,7 @@ class MainTask(object):
         service = Service(executable_path='./chromedriver/chromedriver.exe')
         options = webdriver.ChromeOptions()
         options.add_argument("headless")
+        options.add_experimental_option('excludeSwitches',['enable-logging'])
         self.driver = webdriver.Chrome(service=service, options=options)
         self.wait = WebDriverWait(self.driver, 10)
         self.lock = Lock()
@@ -259,6 +313,7 @@ class MainTask(object):
 
         print("start_url:", start_url)
         ps = self.getPageText(start_url)
+
         soup = BeautifulSoup(ps, 'lxml')
         rets = soup.find_all(name='div', attrs={'class': 'col-xs-6 col-sm-4 col-md-3 col-xl-2'})
         
@@ -291,7 +346,7 @@ if __name__ =="__main__":
     log = "books.txt"  #本子的记录设置，避免重复下载
     save_path = "./download/" #保存本子的目录
     MAX_TASK_LIMIT = 5  #多少个并行抓取进程
-    MAX_PAGE_LIMIT = 10 #page_base的最大页面
+    MAX_PAGE_LIMIT = 2 #page_base的最大页面
     page_base = "https://hentai2read.com/hentai-list/category/rape/all/name-az" #要抓取的页面
     #抓取页面范围，请根据需要修改
     #https://hentai2read.com/hentai-list/category/rape/all/name-az/1/
@@ -340,7 +395,7 @@ if __name__ =="__main__":
             #检查是否已经获取，可以删除log中的书本名来重新抓取
             if book.title in finished_books:
                 print("book already done - ", book.title)
-                continue
+                #continue
             
             #限制进程数，等待空余
             while True:
@@ -374,5 +429,7 @@ if __name__ =="__main__":
     #退出处理
     for i in task_list:
         i.terminate()
+
+    app.close()
 
     print("Program Exited")
