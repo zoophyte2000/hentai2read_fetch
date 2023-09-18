@@ -200,6 +200,9 @@ class downloadTask(Process):
             chapter1 = string_split(self.book.chapter_urls[0], "/")[-1]
             sp_base = self.save_path + self.book.title + '/'
 
+            if len(self.book.chapter_urls) > 1: #多个Chapter
+                shutil.rmtree(sp_base)
+
             #一些补救代码，之后无用
             if os.path.exists(sp_base):
                 if os.path.exists(sp_base + chapter1) == False: 
@@ -215,7 +218,7 @@ class downloadTask(Process):
                     make_dir(sp_base + chapter + '/')
                 
                 for pic_download_url in self.book.download_urls[chapter_url]:
-                    print("pic_download_url=", pic_download_url)
+                    #print("pic_download_url=", pic_download_url)
                     self.downloadPagePic(pic_download_url, sp_base + chapter + '/')
 
                 self.record.appendData(self.book.title)
@@ -345,8 +348,8 @@ if __name__ =="__main__":
     
     log = "books.txt"  #本子的记录设置，避免重复下载
     save_path = "./download/" #保存本子的目录
-    MAX_TASK_LIMIT = 5  #多少个并行抓取进程
-    MAX_PAGE_LIMIT = 2 #page_base的最大页面
+    MAX_TASK_LIMIT = 6  #多少个并行抓取进程
+    MAX_PAGE_LIMIT = 105 #page_base的最大页面
     page_base = "https://hentai2read.com/hentai-list/category/rape/all/name-az" #要抓取的页面
     #抓取页面范围，请根据需要修改
     #https://hentai2read.com/hentai-list/category/rape/all/name-az/1/
